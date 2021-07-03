@@ -66,7 +66,7 @@ This will create `data/cocobu_fc`, `data/cocobu_att` and `data/cocobu_box`.
 ### Grid Features
 To extract the horizontal and vertical spatial weights, run:
 ```
-python prepro_areas.py --input_dir data/cocobu_box --output_dir data/cocobu_box_vec --num_grids 144
+python prepro_areas.py --input_json data/dataset_coco.json --images_root IMAGE_ROOT --input_dir data/cocobu_box --output_dir data/cocobu_box_vec --num_grids 144
 ```
 
 ## Training
