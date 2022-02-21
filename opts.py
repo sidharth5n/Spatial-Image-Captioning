@@ -29,8 +29,8 @@ def parse_opt():
                     help='Cached token file for calculating cider score during self critical training.')
 
     # Model settings
-    parser.add_argument('--caption_model', type=str, default="vanilla",
-                    help='ort, local, spatial, new_local, vanilla, spatial_pe, show_tell')
+    parser.add_argument('--caption_model', type=str, default="transformer", choices = ['transformer', 'show_tell', 'show_attend_tell'].
+                    help = 'Model type')
     parser.add_argument('--ff_size', type=int, default=512,
                     help='Size of first layer in position wise feed forward network')
     parser.add_argument('--ff_activation', type=str, default='RELU', choices = ['RELU', 'GELU'],
@@ -61,12 +61,6 @@ def parse_opt():
                     help = 'Type of encoder positional encoding if using learnt encoding')
     parser.add_argument('--use_box', type=str2bool, default=False,
                     help='Whether to use box features')
-    parser.add_argument('--use_local_attn', type=str2bool, default=False,
-                    help='Whether to use local attention in decoder')
-    parser.add_argument('--local_win_size', type=int, default=3,
-                    help="Size of window to be used in local attention")
-    parser.add_argument('--adaptive_dec_self_attn', type=str2bool, default=False,
-                    help="Whether to use adaptive combination of causal and local self attention")
     parser.add_argument('--cross_attn', type=str, default='xlinear',
                     help="Type of cross attention to be used in decoder. One of xlinear or dot-product")
 
@@ -138,17 +132,17 @@ def parse_opt():
                     help='Do we load previous best score when resuming training.')
 
     # misc
-    parser.add_argument('--id', type=str, default='',
+    parser.add_argument('--id', type = str, required = True,
                     help='an id identifying this run/job. used in cross-val and appended when writing progress files')
-    parser.add_argument('--train_only', type=str2bool, default=False,
+    parser.add_argument('--train_only', type = str2bool, default = False,
                     help='if true then use 80k, else use 110k')
-    parser.add_argument('--device', type=str, default='cuda',
-                    help="Device to be used. One of 'cuda' or 'cpu'.")
+    parser.add_argument('--device', type = str, default = 'cuda', choices = ['cuda', 'cpu'],
+                    help="Device to be used")
 
     # Reward
-    parser.add_argument('--cider_reward_weight', type=float, default=1,
+    parser.add_argument('--cider_reward_weight', type = float, default = 1,
                     help='The reward weight from cider')
-    parser.add_argument('--bleu_reward_weight', type=float, default=0,
+    parser.add_argument('--bleu_reward_weight', type = float, default = 0,
                     help='The reward weight from bleu4')
 
     # Transformer
@@ -160,7 +154,6 @@ def parse_opt():
                     help='')
     parser.add_argument('--noamopt_factor', type=float, default=1,
                     help='')
-
     parser.add_argument('--reduce_on_plateau', action='store_true',
                     help='')
 
@@ -186,7 +179,7 @@ def parse_opt():
     assert (args.use_grid and args.use_box) == 0, "Only one of use_grid and use_box should be True"
     assert args.device in ['cpu', 'cuda'], "device has to be on of 'cpu' or 'cuda'"
     if args.noamopt:
-        assert args.caption_model in ['local', 'ort', 'spatial', 'diff_local', 'new_local', 'diff_local2', 'vanilla', 'spatial_pe', 'spatial_pe2', 'spatial_pe3', 'normed_spatial_pe', 'normed_spatial_pe2'], 'noamopt can only work with transformer'
+        assert args.caption_model == 'transformer', 'noamopt can only work with transformer'
     elif args.caption_model == 'show_tell':
         assert args.input_fc_feat_dir is not None
     if args.caption_model == 'spatial':
