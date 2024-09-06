@@ -1,7 +1,4 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+from typing import Callable, Optional, Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,67 +6,16 @@ import math
 
 from misc.utils import clones
 
-class GELU(nn.Module):
-    def forward(self, input):
-        return F.gelu(input)
-
-class RMSNorm(nn.Module):
-    def __init__(self, d_model, p = -1., eps = 1e-8, bias = False):
-        """
-        Root Mean Square Layer Normalization
-        https://github.com/bzhangGo/rmsnorm/blob/master/rmsnorm_torch.py
-
-        Parameters
-        ----------
-        d_model : int
-                  Model size
-        p       : float, optional
-                  Partial RMSNorm, valid value [0, 1]. Default value is -1.0 (disabled)
-        eps     : float, optional
-                  Epsilon value. Default value is 1e-8.
-        bias    : bool, optional
-                  Whether to use bias term for RMSNorm. Default is False.
-                  Disabled by default because RMSNorm doesn't enforce re-centering
-                  invariance.
-        """
-        super(RMSNorm, self).__init__()
-        self.eps = eps
-        self.d = d_model
-        self.p = p
-        self.bias = bias
-
-        self.scale = nn.Parameter(torch.ones(self.d))
-        self.register_parameter("scale", self.scale)
-
-        if self.bias:
-            self.offset = nn.Parameter(torch.zeros(self.d))
-            self.register_parameter("offset", self.offset)
-
-    def forward(self, x):
-        if self.p < 0. or self.p > 1.:
-            norm_x = x.norm(2, dim=-1, keepdim=True)
-            d_x = self.d
-        else:
-            partial_size = int(self.d * self.p)
-            partial_x, _ = torch.split(x, [partial_size, self.d - partial_size], dim=-1)
-
-            norm_x = partial_x.norm(2, dim=-1, keepdim=True)
-            d_x = partial_size
-
-        rms_x = norm_x * d_x ** (-1. / 2)
-        x_normed = x / (rms_x + self.eps)
-
-        if self.bias:
-            return self.scale * x_normed + self.offset
-
-        return self.scale * x_normed
 
 class SublayerConnection(nn.Module):
     """
     A residual connection followed by a layer norm.
     Note for code simplicity the norm is first as opposed to last.
     """
-    def __init__(self, size, dropout, norm = 'layer'):
+    def __init__(self,
+                 size: int,
+                 dropout: float,
+                 norm: Callable[[int], nn.Module]):
         """
         Parameters
         ----------
@@ -78,8 +24,8 @@ class SublayerConnection(nn.Module):
         dropout : float
                   Dropout probability
         """
-        super(SublayerConnection, self).__init__()
-        self.norm = nn.LayerNorm(size) if norm == 'layer' else RMSNorm(size)
+        super().__init__()
+        self.norm = norm(size)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
@@ -91,7 +37,11 @@ class PositionwiseFeedForward(nn.Module):
     Implements FFN equation.
     d_model -> d_ff -> ReLU -> dropout -> d_model
     """
-    def __init__(self, d_model, d_ff, dropout = 0.1, activation = 'RELU'):
+    def __init__(self,
+                 d_model: int,
+                 d_ff: int,
+                 dropout: float,
+                 activation: Callable[[], nn.Module]):
         """
         Parameters
         ----------
@@ -102,9 +52,9 @@ class PositionwiseFeedForward(nn.Module):
         dropout : float
                   Dropout probability
         """
-        super(PositionwiseFeedForward, self).__init__()
+        super().__init__()
         self.fc = nn.Sequential(nn.Linear(d_model, d_ff),
-                                nn.ReLU() if activation == 'RELU' else GELU(),
+                                activation(),
                                 nn.Dropout(dropout),
                                 nn.Linear(d_ff, d_model))
 
@@ -159,7 +109,10 @@ class MultiHeadedAttention(nn.Module):
     """
     Computes multiple attentions by linearly projecting queries, keys and values.
     """
-    def __init__(self, heads, d_model, dropout = 0.1):
+    def __init__(self,
+                 heads: int,
+                 d_model: int,
+                 dropout: float = 0.1):
         """
         Parameters
         ----------
@@ -170,7 +123,7 @@ class MultiHeadedAttention(nn.Module):
         dropout : float, optional
                   Dropout probability. Default is 0.1.
         """
-        super(MultiHeadedAttention, self).__init__()
+        super().__init__()
         assert d_model % heads == 0
         # We assume d_v always equals d_k
         self.d_k = d_model // heads
@@ -211,7 +164,8 @@ class MultiHeadedAttention(nn.Module):
         query, key, value = [l(x).view(nbatches, -1, self.heads, self.d_k).transpose(1, 2)
                              for l, x in zip(self.linears, (query, key, value))]
         # Applying attention on all the projected vectors in batch, (B,H,Q,d), (B,H,Q,K)
-        x, self.attn = attention(query, key, value, mask, self.dropout)
+        # x, self.attn = attention(query, key, value, mask, self.dropout)
+        x = F.scaled_dot_product_attention(query, key, value, mask, self.dropout)
         # Concatenate all the attention heads and apply linear layer, (B,H,Q,d)->(B,Q,H,d)->(B,Q,H*d=D)
         x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.heads * self.d_k)
         # (B,Q,H*d_k=d)->(B,Q,d)
@@ -224,7 +178,11 @@ class XLinearMultiHeadedAttention(nn.Module):
     Attention Networks for Image Captioning"
     """
 
-    def __init__(self, heads, d_model, mid_dim = None, dropout = 0.1):
+    def __init__(self,
+                 heads: int,
+                 d_model: int,
+                 mid_dim: Optional[int] = None,
+                 dropout: float = 0.1):
         """
         Parameters
         ----------
@@ -281,7 +239,10 @@ class Attention(nn.Module):
     """
     Computes spatial and channel attended feature.
     """
-    def __init__(self, embed_dim, mid_dim, dropout):
+    def __init__(self,
+                 embed_dim: int,
+                 mid_dim: Optional[int],
+                 dropout: float):
         """
         Parameters
         ----------
@@ -292,7 +253,7 @@ class Attention(nn.Module):
         mid_dim   : int, optional
                     Size of embedding. Default is embed_dim/2.
         """
-        super(Attention, self).__init__()
+        super().__init__()
         if mid_dim is None:
             mid_dim = embed_dim // 2
         self.embed = nn.Sequential(nn.Linear(embed_dim, mid_dim),
@@ -352,7 +313,12 @@ class EncoderLayer(nn.Module):
     position wise feed forward. Each sub-module is wrapped around layer norm and
     residual connection.
     """
-    def __init__(self, size, self_attn, feed_forward, norm, dropout):
+    def __init__(self,
+                 size: int,
+                 self_attn: nn.Module,
+                 feed_forward: nn.Module,
+                 norm: Callable[[int], nn.Module],
+                 dropout: float):
         """
         Parameters
         ----------
@@ -363,7 +329,7 @@ class EncoderLayer(nn.Module):
         dropout      : float
                        Dropout probability
         """
-        super(EncoderLayer, self).__init__()
+        super().__init__()
         self.self_attn = self_attn
         self.feed_forward = feed_forward
         self.sublayer = clones(SublayerConnection(size, dropout, norm), 2)
@@ -393,7 +359,10 @@ class EncoderLayer(nn.Module):
 
 class Encoder(nn.Module):
     "Core encoder is a stack of N layers"
-    def __init__(self, layer, norm, N):
+    def __init__(self,
+                 layer: nn.Module,
+                 norm: Callable[[int], nn.Module],
+                 N: int):
         """
         Parameters
         ----------
@@ -401,9 +370,9 @@ class Encoder(nn.Module):
         N     : int
                 No. of encoder layers
         """
-        super(Encoder, self).__init__()
+        super().__init__()
         self.layers = clones(layer, N)
-        self.norm = nn.LayerNorm(layer.size) if norm == 'layer' else RMSNorm(layer.size)
+        self.norm = norm(layer.size)
 
     def forward(self, x, mask = None):
         """
@@ -434,7 +403,13 @@ class DecoderLayer(nn.Module):
     attention, cross attention and position wise feed forward. Each sub-module
     (except local attention) is wrapped around layer norm and residual connection.
     """
-    def __init__(self, size, self_attn, cross_attn, feed_forward, norm, dropout = 0.1):
+    def __init__(self,
+                 size: int,
+                 self_attn: nn.Module,
+                 cross_attn: nn.Module,
+                 feed_forward: nn.Module,
+                 norm: Callable[[int], nn.Module],
+                 dropout: float = 0.1):
         """
         Parameters
         ----------
@@ -447,7 +422,7 @@ class DecoderLayer(nn.Module):
         dropout      : float, optional
                        Dropout probability. Default is 0.1.
         """
-        super(DecoderLayer, self).__init__()
+        super().__init__()
         self.size = size
         self.self_attn = self_attn
         self.cross_attn = cross_attn
@@ -482,7 +457,10 @@ class DecoderLayer(nn.Module):
 
 class Decoder(nn.Module):
     "Generic N layer decoder with masking."
-    def __init__(self, layer, norm, N):
+    def __init__(self,
+                 layer: nn.Module,
+                 norm: Callable[[int], nn.Module],
+                 N: int):
         """
         Parameters
         ----------
@@ -490,9 +468,9 @@ class Decoder(nn.Module):
         N     : int
                 No. of decoder layers
         """
-        super(Decoder, self).__init__()
+        super().__init__()
         self.layers = clones(layer, N)
-        self.norm = nn.LayerNorm(layer.size) if norm == 'layer' else RMSNorm(layer.size)
+        self.norm = norm(layer.size)
 
     def forward(self, x, enc_out, src_mask, tgt_mask):
         """
@@ -520,8 +498,10 @@ class Decoder(nn.Module):
         return x
 
 class Embeddings(nn.Module):
-    def __init__(self, d_model, vocab):
-        super(Embeddings, self).__init__()
+    def __init__(self,
+                 d_model: int,
+                 vocab: int):
+        super().__init__()
         self.embedding = nn.Embedding(vocab, d_model)
         self.d_model = d_model
 
@@ -532,7 +512,10 @@ class PositionalEncoding(nn.Module):
     """
     Implement the PE function as given in the paper - Attention is All You Need.
     """
-    def __init__(self, d_model, dropout, max_len = 5000):
+    def __init__(self,
+                 d_model: int,
+                 dropout: float,
+                 max_len: int = 5000):
         """
         Parameters
         ----------
@@ -543,7 +526,7 @@ class PositionalEncoding(nn.Module):
         max_len : int, optional
                   Maximum length of the sequence. Default is 5000.
         """
-        super(PositionalEncoding, self).__init__()
+        super().__init__()
         self.dropout = nn.Dropout(p = dropout)
         # Compute the positional encodings once in log space.
         pe = torch.zeros(max_len, d_model)
@@ -575,7 +558,12 @@ class SpatialPositionalEncoding(nn.Module):
     """
     Implement the PE function.
     """
-    def __init__(self, grids, d_model, dropout, learnable = True, learnable_type = 'gxg'):
+    def __init__(self,
+                 grids: int,
+                 d_model: int,
+                 dropout: float,
+                 learnable: bool = True,
+                 learnable_type: Literal['gxg', 'g2', 'box-coord'] = 'gxg'):
         """
         Parameters
         ----------
@@ -590,7 +578,7 @@ class SpatialPositionalEncoding(nn.Module):
         learnable_type : str
                          Type of learnable embedding. One of 'gxg', 'g2' or 'box-coord'
         """
-        super(SpatialPositionalEncoding, self).__init__()
+        super().__init__()
         assert int(grids ** 0.5) ** 2 == grids, "Grids must be a whole square"
         grids = int(grids ** 0.5)
         self.learnable = learnable
@@ -671,7 +659,12 @@ class EncoderDecoder(nn.Module):
     A standard Encoder-Decoder architecture. Base for this and many
     other models.
     """
-    def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
+    def __init__(self,
+                 encoder: nn.Module,
+                 decoder: nn.Module,
+                 src_embed: nn.Module,
+                 tgt_embed: nn.Module,
+                 generator: nn.Module):
         """
         Parameters
         ----------
@@ -682,7 +675,7 @@ class EncoderDecoder(nn.Module):
         generator : Generator
                     Projects to vocab size and gives log-softmax output
         """
-        super(EncoderDecoder, self).__init__()
+        super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.src_embed = src_embed
@@ -764,7 +757,9 @@ class Generator(nn.Module):
     """
     Projects input to vocabulary size and gives log-softmax output.
     """
-    def __init__(self, d_model, vocab):
+    def __init__(self,
+                 d_model: int,
+                 vocab: int):
         """
         Parameters
         ----------
@@ -773,7 +768,7 @@ class Generator(nn.Module):
         vocab   : int
                   Vocabulary size
         """
-        super(Generator, self).__init__()
+        super().__init__()
         self.proj = nn.Linear(d_model, vocab)
 
     def forward(self, x):

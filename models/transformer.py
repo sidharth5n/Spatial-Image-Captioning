@@ -7,40 +7,60 @@ import torch.nn as nn
 import copy
 
 from misc.utils import pack_wrapper, clip_att, subsequent_mask
-from .CaptionModel import CaptionModel
+from .caption_model import CaptionModel
 from .layers import *
 
 class TransformerModel(CaptionModel):
     """
     Vanilla transformer captioning model with spatial positional encoding
     """
-    def __init__(self, opt):
-        super(TransformerModel, self).__init__()
-        self.opt = opt
-        self.vocab_size = opt.vocab_size
-        self.input_encoding_size = opt.input_encoding_size
-        self.seq_length = opt.seq_length
-        self.img_feat_size = opt.img_feat_size
-        self.use_bn = getattr(opt, 'use_bn', 0)
+    def __init__(self,
+                 vocab_size: int,
+                 num_layers: int,
+                 num_grids: int,
+                 input_encoding_size: int,
+                 seq_length: int,
+                 img_feat_size: int,
+                 ff_size: int,
+                 heads: int,
+                 use_grid: bool,
+                 cross_attn: Callable[[int, int, int], nn.Module],
+                 norm: str,
+                 ff_activation: str,
+                 dropout: float,
+                 enc_pos_embedding: bool = False,
+                 enc_pos_type: str = 'gxg',
+                 use_bn: bool = False,
+                 ):
+
+        super().__init__()
+        
+        self.vocab_size = vocab_size
+        self.input_encoding_size = input_encoding_size
+        self.seq_length = seq_length
+        self.img_feat_size = img_feat_size
+        self.use_bn = use_bn
         self.ss_prob = 0.0 # Schedule sampling probability
 
 
         self.att_embed = nn.Sequential(nn.Linear(self.img_feat_size, self.input_encoding_size),
                                        nn.ReLU(),
-                                       nn.Dropout(opt.dropout))
+                                       nn.Dropout(dropout))
 
         tgt_vocab = self.vocab_size + 1
-        self.model = self.make_model(tgt_vocab, N = opt.num_layers,
-                                     grids = opt.num_grids,
-                                     d_model = opt.input_encoding_size,
-                                     d_ff = opt.ff_size, heads = opt.heads,
-                                     use_grid = opt.use_grid,
-                                     enc_learnable_pos = getattr(opt, 'enc_pos_embedding', False),
-                                     enc_learnable_pos_type = getattr(opt, 'enc_pos_type', 'gxg'),
-                                     cross_attn = opt.cross_attn,
-                                     norm = opt.norm,
-                                     ff_activation = opt.ff_activation,
-                                     dropout = opt.dropout)
+        self.model = self.make_model(tgt_vocab,
+                                     N = num_layers,
+                                     grids = num_grids,
+                                     d_model = input_encoding_size,
+                                     d_ff = ff_size,
+                                     heads = heads,
+                                     use_grid = use_grid,
+                                     enc_learnable_pos = enc_pos_embedding,
+                                     enc_learnable_pos_type = enc_pos_type,
+                                     cross_attn = cross_attn,
+                                     norm = norm,
+                                     ff_activation = ff_activation,
+                                     dropout = dropout)
 
     def make_model(self, tgt_vocab, N = 6, grids = 576, d_model = 512, d_ff = 2048,
                    heads = 8, use_grid = False, enc_learnable_pos = False,

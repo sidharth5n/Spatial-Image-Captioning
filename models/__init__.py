@@ -5,17 +5,17 @@ from __future__ import print_function
 import os
 import torch
 
-from .TransformerModel import TransformerModel
-from .ShowAndTellModel import ShowAndTell
-from .ShowAttendAndTellModel import ShowAttendAndTell
+from .transformer import TransformerModel
+# from .ShowAndTellModel import ShowAndTell
+# from .ShowAttendAndTellModel import ShowAttendAndTell
 
 def setup(opt, device):
     if opt.caption_model == 'transformer':
         model = TransformerModel(opt)
-    elif opt.caption_model == 'show_tell':
-        model = ShowAndTell(opt)
-    elif opt.caption_model == 'show_attend_tell':
-        model = ShowAttendAndTell(opt)
+    # elif opt.caption_model == 'show_tell':
+    #     model = ShowAndTell(opt)
+    # elif opt.caption_model == 'show_attend_tell':
+    #     model = ShowAttendAndTell(opt)
     else:
         raise Exception("Caption model not supported: {}".format(opt.caption_model))
     

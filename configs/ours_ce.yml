@@ -1,0 +1,62 @@
+model:
+  class_path: models.ce_model.CEModel
+  init_args:
+    model:
+      class_path: models.transformer.TransformerModel
+      init_args:
+        num_layers: 1
+        input_encoding_size: 512
+        img_feat_size: 2048
+        ff_size: 512
+        heads: 8
+        use_grid: false
+        num_grids: 576
+        cross_attn: models.layers.XLinearMultiHeadedAttention
+        norm: torch.nn.LayerNorm
+        ff_activation: torch.nn.ReLU
+        enc_pos_embedding: true
+        enc_pos_type: gxg
+        use_bn: false
+        dropout: 0.5
+    criterion:
+      class_path: loss_and_reward.cross_entropy.CrossEntropyLoss
+      # class_path: loss_and_reward.kl_divergence.LabelSmoothingLoss # when using label_smoothing
+    optimizer: 
+      class_path: torch.optim.Adam
+      init_args:
+        lr: 4e-4
+        betas: [0.9, 0.999]
+        weight_decay: 0
+    scheduler:
+      class_path: misc.scheduler.DefaultScheduler
+      init_args:
+        start: -1
+        frequency: 3
+        factor: 0.8
+    # # NoAm Optimizer & Scheduler
+    # optimizer: 
+    #   class_path: torch.optim.Adam
+    #   init_args:
+    #     lr: 1
+    #     betas: [0.9, 0.98]
+    #     weight_decay: 0
+    # scheduler:
+    #   class_path: misc.scheduler.NoamScheduler
+    #   init_args:
+    #     factor: 1
+    #     d_model:
+    #     warmup: 20000
+    # # Reduce LR on Plateau Scheduler
+    # scheduler:
+    #   class_path: torch.optim.lr_scheduler.ReduceLROnPlateau
+    #   init_args:
+    #     factor: 0.5
+    #     patience: 3
+    scheduled_sampling_scheduler:
+      class_path: misc.scheduler.ScheduledSamplingProbScheduler
+      init_args:
+        start_epoch: -1
+        frequency: 5
+        factor: 0.05
+        max_prob: 0.25
+    beam_width: 1

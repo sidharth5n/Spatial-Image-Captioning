@@ -1,0 +1,15 @@
+model:
+  class_path: models.rl_model.RLModel
+  init_args:
+    model:
+    criterion:
+    reward: 
+      class_path: misc.rewards.SelfCriticalReward
+      init_args:
+        cider_reward_weight: 1
+        bleu_reward_weight: 0
+    critic: loss_and_reward.rl_loss.RewardCriterion
+    beam_width: 1
+
+data:
+  cached_tokens: 'coco-train-idxs'
