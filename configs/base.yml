@@ -39,21 +39,26 @@ trainer:
         save_on_train_epoch_end: true
 
 data:
-  class_path: data.modules.COCODataModule
+  class_path: data.modules.coco.COCODataModule
   init_args:
-    root: 'data'
-    input_json: dataset_coco.json
-    input_fc_feat_dir: cocobu_fc
-    input_img_feat_dir: cocobu_att
-    input_box_dir: cocobu_box
-    input_rel_box_dir: cocobu_rel_box
-    input_grid_vec_dir: cocobu_box_vec
-    input_label_h5: coco_label.h5
-    norm_img_feat: false
-    norm_box_feat: false
-    seq_per_img: 5
+    input_json: data/dataset_coco.json
+    image_root: data/images
+    bottomup_root: data/bu_data
+    output_json: data/cocotalk.json
+    output_pkl: data/coco-all
+    bu_data: data/cocobu
+    image_feature: att
+    box_feature: box
+    # input_rel_box_dir: cocobu_box_relative
+    # input_grid_vec_dir: cocobu_box_vec
+    # input_label_h5: coco_label.h5
+    normalize_image_feature: false
+    normalize_box: false
+    captions_per_image: 5
+    max_caption_length: 16
+    min_word_frequency: 5
     batch_size: 16
-    trainonly: false
+    num_workers: 2
 
 checkpoint: checkpoints
 logs: logs

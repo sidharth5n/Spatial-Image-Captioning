@@ -41,7 +41,7 @@ class PositionwiseFeedForward(nn.Module):
                  d_model: int,
                  d_ff: int,
                  dropout: float,
-                 activation: Callable[[], nn.Module]):
+                 activation: nn.Module):
         """
         Parameters
         ----------
@@ -54,7 +54,7 @@ class PositionwiseFeedForward(nn.Module):
         """
         super().__init__()
         self.fc = nn.Sequential(nn.Linear(d_model, d_ff),
-                                activation(),
+                                activation,
                                 nn.Dropout(dropout),
                                 nn.Linear(d_ff, d_model))
 
@@ -181,8 +181,8 @@ class XLinearMultiHeadedAttention(nn.Module):
     def __init__(self,
                  heads: int,
                  d_model: int,
-                 mid_dim: Optional[int] = None,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1,
+                 mid_dim: Optional[int] = None):
         """
         Parameters
         ----------
@@ -554,74 +554,92 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
-class SpatialPositionalEncoding(nn.Module):
-    """
-    Implement the PE function.
-    """
+class GridEncoding(nn.Module):
+    
     def __init__(self,
-                 grids: int,
                  d_model: int,
                  dropout: float,
-                 learnable: bool = True,
-                 learnable_type: Literal['gxg', 'g2', 'box-coord'] = 'gxg'):
-        """
-        Parameters
-        ----------
-        grids   : int
-                  Number of grids if using grid vectors
-        d_model : int
-                  Size of input
-        dropout : float
-                  Dropout probability
-        learnable : bool
-                    Whether using learnmable embedding
-        learnable_type : str
-                         Type of learnable embedding. One of 'gxg', 'g2' or 'box-coord'
-        """
+                 grids: int):
         super().__init__()
         assert int(grids ** 0.5) ** 2 == grids, "Grids must be a whole square"
         grids = int(grids ** 0.5)
-        self.learnable = learnable
         self.dropout = nn.Dropout(p = dropout)
-        buffer = False
+        self.fc1 = nn.Linear(grids, d_model)
+        self.fc2 = nn.Linear(grids, d_model)
+        self.fc3 = nn.Linear(d_model, d_model)
+        self.grids = grids
+        
+        rows = (torch.arange(grids) % grids).long()
+        cols = (torch.arange(grids) // grids).long()
+        self.register_buffer('rows', rows)
+        self.register_buffer('cols', cols)
+    
+    def forward(self, img_feat, box_vec):
+        nbatches = box_vec.shape[0]
+        box_vec = box_vec.view(nbatches, -1, self.grids, self.grids)
+        pe = self.fc1(box_vec.sum(-1)) + self.fc2(box_vec.sum(-2))
+        img_feat = self.fc3(img_feat) + pe
+        return self.dropout(img_feat)
 
-        if learnable:
-            assert learnable_type in ['gxg', 'g2', 'box-coord'], "learnable_type not available"
-            self.learnable_type = False
-            if learnable_type == 'gxg':
-                print("Initializing grid based encoding")
-                self.fc1 = nn.Linear(grids, d_model)
-                self.fc2 = nn.Linear(grids, d_model)
-                self.fc3 = nn.Linear(d_model, d_model)
-                self.grids = grids
-                buffer = True
-                self.learnable_type = True
-            elif learnable_type == 'g2':
-                self.fc = nn.Linear(grids ** 2, d_model)
-            else:
-                self.fc = nn.Sequential(nn.Linear(4, d_model//2),
-                                        nn.ReLU(),
-                                        nn.Linear(d_model//2, d_model))
-        else:
-            # Compute the positional encodings once in log space.
-            pe1 = torch.zeros(grids, d_model)
-            pe2 = torch.zeros(grids, d_model)
-            position = torch.arange(0, grids).unsqueeze(1).float()
-            div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
-            pe1[:, 0::2] = torch.sin(position * div_term)
-            pe1[:, 1::2] = torch.cos(position * div_term)
-            pe2[:, 0::2] = torch.cos(position * div_term)
-            pe2[:, 1::2] = torch.sin(position * div_term)
-            self.register_buffer('pe1', pe1)
-            self.register_buffer('pe2', pe2)
-            buffer = True
+class G2Encoding(nn.Module):
+    
+    def __init__(self,
+                 d_model: int,
+                 dropout: float,
+                 grids: int):
+        super().__init__()
+        assert int(grids ** 0.5) ** 2 == grids, "Grids must be a whole square"
+        grids = int(grids ** 0.5)
+        self.dropout = nn.Dropout(p = dropout)
+        self.fc = nn.Linear(grids ** 2, d_model)
+    
+    def forward(self, img_feat, box_vec):
+        img_feat = img_feat + self.fc(box_vec)
+        return self.dropout(img_feat)
 
-        if buffer:
-            rows = (torch.arange(grids) % grids).long()
-            cols = (torch.arange(grids) // grids).long()
-            self.register_buffer('rows', rows)
-            self.register_buffer('cols', cols)
+class BoxCoordEncoding(nn.Module):
+    
+    def __init__(self,
+                 d_model: int,
+                 dropout: float,
+                 grids: int):
+        super().__init__()
+        assert int(grids ** 0.5) ** 2 == grids, "Grids must be a whole square"
+        grids = int(grids ** 0.5)
+        self.dropout = nn.Dropout(p = dropout)
+        self.fc = nn.Sequential(nn.Linear(4, d_model//2),
+                                nn.ReLU(),
+                                nn.Linear(d_model//2, d_model))
+    
+    def forward(self, img_feat, box_vec):
+        img_feat = img_feat + self.fc(box_vec)
+        return self.dropout(img_feat)
 
+class TrigonometricEncoding(nn.Module):
+    
+    def __init__(self,
+                 d_model: int,
+                 dropout: float,
+                 grids: int):
+        super().__init__()
+        assert int(grids ** 0.5) ** 2 == grids, "Grids must be a whole square"
+        grids = int(grids ** 0.5)
+        self.dropout = nn.Dropout(p = dropout)
+        pe1 = torch.zeros(grids, d_model)
+        pe2 = torch.zeros(grids, d_model)
+        position = torch.arange(0, grids).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
+        pe1[:, 0::2] = torch.sin(position * div_term)
+        pe1[:, 1::2] = torch.cos(position * div_term)
+        pe2[:, 0::2] = torch.cos(position * div_term)
+        pe2[:, 1::2] = torch.sin(position * div_term)
+        self.register_buffer('pe1', pe1)
+        self.register_buffer('pe2', pe2)
+        rows = (torch.arange(grids) % grids).long()
+        cols = (torch.arange(grids) // grids).long()
+        self.register_buffer('rows', rows)
+        self.register_buffer('cols', cols)
+    
     def forward(self, img_feat, box_vec):
         """
         Adds positional encoding to the input.
@@ -638,21 +656,9 @@ class SpatialPositionalEncoding(nn.Module):
         img_feat : torch.tensor of shape (B, L, D)
                    Input with position encoding added.
         """
-        if self.learnable:
-            if self.learnable_type:
-                # img_feat = img_feat + self.fc1(box_vec[...,self.rows])
-                # img_feat = img_feat + self.fc2(box_vec[...,self.cols])
-                nbatches = box_vec.shape[0]
-                box_vec = box_vec.view(nbatches, -1, self.grids, self.grids)
-                pe = self.fc1(box_vec.sum(-1)) + self.fc2(box_vec.sum(-2))
-                img_feat = self.fc3(img_feat) + pe
-            else:
-                img_feat = img_feat + self.fc(box_vec)
-        else:
-            img_feat = img_feat + torch.einsum("blg,gd->bld", [box_vec[...,self.rows, pe1]])
-            img_feat = img_feat + torch.einsum("blg,gd->bld", [box_vec[...,self.cols, pe2]])
+        img_feat = img_feat + torch.einsum("blg,gd->bld", [box_vec[...,self.rows, self.pe1]])
+        img_feat = img_feat + torch.einsum("blg,gd->bld", [box_vec[...,self.cols, self.pe2]])
         return self.dropout(img_feat)
-
 
 class EncoderDecoder(nn.Module):
     """

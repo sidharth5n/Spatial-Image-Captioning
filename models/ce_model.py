@@ -6,16 +6,20 @@ from models.base import BaseModel
 
 class CEModel(BaseModel):
 
-    def __init__(self,
-                 model: nn.Module,
-                 criterion: nn.Module,
-                 optimizer: OptimizerCallable,
-                 scheduler: Optional[LRSchedulerCallable],
-                 scheduled_sampling_scheduler: Optional[Callable],
-                 beam_width: int
-                 ):
+    # def __init__(self,
+    #              model: nn.Module,
+    #              criterion: nn.Module,
+    #              optimizer: OptimizerCallable,
+    #              scheduler: Optional[LRSchedulerCallable],
+    #              scheduled_sampling_scheduler: Optional[Callable],
+    #              captions_per_image: int,
+    #              beam_width: int,
+    #              temperature: float,
+    #              decoding_constraint: bool,
+    #              image_root: str
+    #              ):
         
-        super().__init__(model, criterion, optimizer, scheduler)
+    #     super().__init__(model, criterion, optimizer, scheduler, scheduled_sampling_scheduler)
     
     def training_step(self, batch, batch_idx):
         img_feats, labels, label_masks, img_masks, boxes = batch

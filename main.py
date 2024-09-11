@@ -10,9 +10,11 @@ class MyLightningCLI(LightningCLI):
                             help = 'Path where checkpoints are to be saved')
         parser.add_argument('--logs', type = str, default = 'logs',
                             help = 'Path where logs are to be saved')
-        parser.link_arguments('data.seq_length', 'model.init_args.model.seq_length')
-        # parser.link_arguments('data.vocab', 'model.init_args.vocab', apply_on = 'instantiate')
-        # parser.link_arguments('data.vocab_size', 'model.init_args.model.vocab_size', apply_on = 'instantiate')
+        parser.link_arguments('data.captions_per_image', 'model.init_args.captions_per_image')
+        parser.link_arguments('data.max_caption_length', 'model.init_args.model.seq_length')
+        parser.link_arguments('data.image_root', 'model.init_args.image_root')
+        # parser.link_arguments('data.vocabulary', 'model.init_args.vocab', apply_on = 'instantiate')
+        # parser.link_arguments('data.vocabulary_size', 'model.init_args.model.init_args.vocab_size', apply_on = 'instantiate')
 
     def before_instantiate_classes(self):
         subcommand = self.config.subcommand

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('Agg')
 from matplotlib.figure import Figure
 from pandas import DataFrame, Series, concat
-from pandas.io.json import json_normalize
+from pandas import json_normalize
 from typing import IO, Optional, Dict, List, Iterable
 from scipy.stats import ttest_rel
 from six.moves import cPickle as pickle
@@ -148,12 +148,11 @@ class ReportConfig:
 
 class ReportData:
 
-    def __init__(self, coco_eval, predictions, image_root, model_id, split):
+    def __init__(self, coco_eval, predictions, image_root, split):
         # type (COCOEvalCap, List[Dict[str, Any]], str, str, str) -> None
         self.coco_eval = coco_eval
         self.predictions = predictions
         self.image_root = image_root
-        self.model_id = model_id
         self.split = split
 
     def save_to_pickle(self, pickle_path):

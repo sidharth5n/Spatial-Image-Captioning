@@ -79,7 +79,7 @@ class CaptionModel(nn.Module):
                         logprobsf[sub_beam][prev_decisions[prev_labels]] = logprobsf[sub_beam][prev_decisions[prev_labels]] - diversity_lambda
             return unaug_logprobsf
 
-        def beam_step(logprobsf, unaug_logprobsf, beam_size, t, beam_seq, beam_seq_logprobs, beam_logprobs_sum, state):
+        def beam_step(logprobsf, unaug_logprobsf, beam_width, t, beam_seq, beam_seq_logprobs, beam_logprobs_sum, state):
             """
             Performs one step of classical beam search.
 
@@ -89,7 +89,7 @@ class CaptionModel(nn.Module):
                                 Diversity augmented log probabilities
             unaug_logprobsf   : torch.tensor of shape (B/G, V)
                                 Log probabilities
-            beam_size         : int
+            beam_width         : int
                                 Size of the beam (B')
             t                 : int
                                 Time step of decoding
@@ -130,12 +130,12 @@ class CaptionModel(nn.Module):
             ys, ix = torch.sort(logprobsf, 1, True)
             candidates = []
             ###################################################
-            # WHY IS cols DEPENDENT ON beam_size????
+            # WHY IS cols DEPENDENT ON beam_width????
             # NEED TO CHECK ALL WORDS IN vocab, RIGHT??
-            # NOT REQUIRED, PROBABILITIES ALREADY SORTED -> MAX TO BE CHECKED beam_size * beam_size ONLY.
+            # NOT REQUIRED, PROBABILITIES ALREADY SORTED -> MAX TO BE CHECKED beam_width * beam_width ONLY.
             ###################################################
-            cols = min(beam_size, ys.size(1))
-            rows = beam_size
+            cols = min(beam_width, ys.size(1))
+            rows = beam_width
             if t == 0:
                 rows = 1
             for c in range(cols): # for each column (word, essentially)
@@ -156,7 +156,7 @@ class CaptionModel(nn.Module):
             # We'll need these as reference when we fork beams around
                 beam_seq_prev = beam_seq[:t].clone()
                 beam_seq_logprobs_prev = beam_seq_logprobs[:t].clone()
-            for vix in range(beam_size):
+            for vix in range(beam_width):
                 v = candidates[vix]
                 # Fork beam index q into index vix
                 if t >= 1:
@@ -176,7 +176,7 @@ class CaptionModel(nn.Module):
         # Start diverse_beam_search
         opt = kwargs['opt']
         # Get beam size, default is 10
-        beam_size = opt.get('beam_size', 10)
+        beam_width = opt.get('beam_width', 10)
         # Get group size for diverse beam search, default is normal beam search
         group_size = opt.get('group_size', 1)
         # Get lambda for diverse beam search, default is 0.5
@@ -184,9 +184,9 @@ class CaptionModel(nn.Module):
         # Whether not to allow same words in a row, default is allow
         decoding_constraint = opt.get('decoding_constraint', 0)
         # Find beam search by max perplexity or max probability
-        max_ppl = opt.get('max_ppl', 0)
+        perplexity = opt.get('perplexity', 0)
         # Find no. of beams per group (for diverse beam search)
-        bdash = beam_size // group_size # beam per group
+        bdash = beam_width // group_size # beam per group
 
         # INITIALIZATIONS
         # [(T,B')]*G
@@ -196,7 +196,7 @@ class CaptionModel(nn.Module):
         # [(B',)]*G
         beam_logprobs_sum_table = [torch.zeros(bdash) for _ in range(group_size)]
 
-        # logprobs # logprobs predicted in last time step, shape (beam_size, vocab_size+1)
+        # logprobs # logprobs predicted in last time step, shape (beam_width, vocab_size+1)
         done_beams_table = [[] for _ in range(group_size)]
         # [(1,B,1)]->(1,1,B,1)->tuple((1,1,B/G,1))*G->[[(1,B/G,1)]*G]
         state_table = [list(torch.unbind(_)) for _ in torch.stack(init_state).chunk(group_size, 2)]
@@ -256,7 +256,7 @@ class CaptionModel(nn.Module):
                                 'unaug_p': beam_seq_logprobs_table[divm][:, vix].sum().item(),
                                 'p': beam_logprobs_sum_table[divm][vix].item()
                             }
-                            if max_ppl:
+                            if perplexity:
                                 final_beam['p'] = final_beam['p'] / (t-divm+1)
                             done_beams_table[divm].append(final_beam)
                             # Don't continue beams from finished sequences

@@ -25,7 +25,7 @@ preprocess = transforms.Compose([#trn.ToTensor(),
 
 
 
-def main(params):
+def compute_features(params):
     # Load the resnet architecture corresponding to params['model']
     net = getattr(resnet, params['model'])()
     # Load corresponding state dictionary

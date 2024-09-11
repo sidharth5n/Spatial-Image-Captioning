@@ -2,6 +2,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from typing import Optional, Dict, List
+import os
 import collections
 import torch
 import torch.nn as nn
@@ -24,6 +26,35 @@ def load(path):
     with open(path, 'rb') as f:
         return pickle.load(f)
 
+def validate_path(path: str,
+                  name: str,
+                  ext: Optional[str] = None,
+                  exists: bool = True):
+    """
+    Validate given path.
+    
+    Args:
+        path (str): Path to a directory/file
+        name (str): Name of the variable
+        ext (Optional[str], optional): Extension of the file. Defaults to None.
+        exists (bool, optional): Whether the given path should exist. Defaults to True.
+
+    Raises:
+        TypeError: If path is not a string
+        ValueError: If path does not have file extension given in ext
+        ValueError: If path does not exist when exists is enabled
+    """
+    if not isinstance(path, str):
+        raise TypeError(f'Expected argument `{name}` to be of type str, but got {type(path)}')
+    
+    if ext and os.path.splitext(path)[1].lower() != ext.lower():
+        raise ValueError(f'Expected argument `{name}` to be path to {ext} file,'
+                         f' but got {path}')
+    
+    if exists and not os.path.exists(path):
+        raise ValueError(f'Expected argument `{name}` to be a path to existing file/directory,'
+                         f' but got {path}')
+
 def apply_along_batch(func, M):
     #apply torch function for each image in a batch, and concatenate results back into a single tensor
     tensorList = [func(m) for m in torch.unbind(M, dim=0) ]
@@ -31,17 +62,30 @@ def apply_along_batch(func, M):
     return result
 
 # Input: seq, N*D numpy array, with element 0 .. vocab_size. 0 is END token.
-def decode_sequence(ix_to_word, seq):
-    N, D = seq.size()
+def decode_sequence(ix_to_word: Dict[int, str],
+                    seq: torch.LongTensor
+                    ) -> List[str]:
+    """
+    Decodes a given sequence based on the provided mapping.
+
+    Args:
+        ix_to_word (Dict[int, str]): Mapping from index to word
+        seq (torch.IntTensor): Sequence to be decoded
+
+    Returns:
+        List[str]: Decoded sequence(s)
+    """
+    n, d = seq.size()
     out = []
-    for i in range(N):
+    for i in range(n):
         txt = ''
-        for j in range(D):
+        for j in range(d):
             ix = seq[i,j]
             if ix > 0 :
                 if j >= 1:
                     txt = txt + ' '
-                txt = txt + ix_to_word[str(ix.item())]
+                # txt = txt + ix_to_word[str(ix.item())]
+                txt = txt + ix_to_word[ix.item()]
             else:
                 break
         out.append(txt)

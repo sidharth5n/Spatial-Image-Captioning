@@ -9,14 +9,13 @@ model:
         img_feat_size: 2048
         ff_size: 512
         heads: 8
-        use_grid: false
-        num_grids: 576
-        cross_attn: models.layers.XLinearMultiHeadedAttention
+        cross_attention: models.layers.XLinearMultiHeadedAttention
         norm: torch.nn.LayerNorm
         ff_activation: torch.nn.ReLU
-        enc_pos_embedding: true
-        enc_pos_type: gxg
-        use_bn: false
+        enc_pos_embedding:
+          class_path: models.layers.GridEncoding
+          init_args:
+            grids: 576
         dropout: 0.5
     criterion:
       class_path: loss_and_reward.cross_entropy.CrossEntropyLoss
@@ -60,3 +59,5 @@ model:
         factor: 0.05
         max_prob: 0.25
     beam_width: 1
+    temperature: 1.0
+    decoding_constraint: false

@@ -1,7 +1,4 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+from typing import Tuple, Optional, List
 import torch
 import torch.nn as nn
 import copy
@@ -17,55 +14,52 @@ class TransformerModel(CaptionModel):
     def __init__(self,
                  vocab_size: int,
                  num_layers: int,
-                 num_grids: int,
                  input_encoding_size: int,
                  seq_length: int,
                  img_feat_size: int,
                  ff_size: int,
                  heads: int,
-                 use_grid: bool,
-                 cross_attn: Callable[[int, int, int], nn.Module],
-                 norm: str,
-                 ff_activation: str,
+                 cross_attention: Callable[[int, int, float], nn.Module],
+                 norm: Callable[[int], nn.Module],
+                 ff_activation: nn.Module,
                  dropout: float,
-                 enc_pos_embedding: bool = False,
-                 enc_pos_type: str = 'gxg',
-                 use_bn: bool = False,
+                 enc_pos_embedding: Optional[Callable[[int, float], nn.Module]],
                  ):
 
         super().__init__()
         
         self.vocab_size = vocab_size
-        self.input_encoding_size = input_encoding_size
+        # self.input_encoding_size = input_encoding_size
         self.seq_length = seq_length
-        self.img_feat_size = img_feat_size
-        self.use_bn = use_bn
+        # self.img_feat_size = img_feat_size
         self.ss_prob = 0.0 # Schedule sampling probability
 
-
-        self.att_embed = nn.Sequential(nn.Linear(self.img_feat_size, self.input_encoding_size),
+        self.att_embed = nn.Sequential(nn.Linear(img_feat_size, input_encoding_size),
                                        nn.ReLU(),
                                        nn.Dropout(dropout))
 
-        tgt_vocab = self.vocab_size + 1
-        self.model = self.make_model(tgt_vocab,
-                                     N = num_layers,
-                                     grids = num_grids,
-                                     d_model = input_encoding_size,
-                                     d_ff = ff_size,
-                                     heads = heads,
-                                     use_grid = use_grid,
-                                     enc_learnable_pos = enc_pos_embedding,
-                                     enc_learnable_pos_type = enc_pos_type,
-                                     cross_attn = cross_attn,
-                                     norm = norm,
-                                     ff_activation = ff_activation,
-                                     dropout = dropout)
-
-    def make_model(self, tgt_vocab, N = 6, grids = 576, d_model = 512, d_ff = 2048,
-                   heads = 8, use_grid = False, enc_learnable_pos = False,
-                   enc_learnable_pos_type = 'gxg', cross_attn = 'dot-product',
-                   norm = 'layer', ff_activation = 'RELU', dropout = 0.1):
+        self.model = self.make_model(self.vocab_size + 1,
+                                     num_layers,
+                                     input_encoding_size,
+                                     ff_size,
+                                     heads,
+                                     enc_pos_embedding,
+                                     cross_attention,
+                                     norm,
+                                     ff_activation,
+                                     dropout)
+    
+    @staticmethod
+    def make_model(tgt_vocab: int,
+                   N: int,# = 6,
+                   d_model: int,# = 512,
+                   d_ff: int,# = 2048,
+                   heads: int,# = 8,
+                   enc_pos_embedding: Optional[Callable[[int, float], nn.Module]],
+                   cross_attention: Callable[[int, int, float], nn.Module],
+                   norm: Callable[[int], nn.Module],
+                   ff_activation: nn.Module,
+                   dropout: float = 0.1):
         """
         Constructs the model from hyperparameters with Xavier initialization.
 
@@ -94,14 +88,16 @@ class TransformerModel(CaptionModel):
                     initialized.
         """
         c = copy.deepcopy
-        CrossAttention = {'xlinear' : XLinearMultiHeadedAttention, 'dot-product' : MultiHeadedAttention}
+        # CrossAttention = {'xlinear' : XLinearMultiHeadedAttention, 'dot-product' : MultiHeadedAttention}
         self_attn = MultiHeadedAttention(heads, d_model, dropout)
-        cross_attn = CrossAttention[cross_attn](heads if cross_attn == 'dot-product' else 1, d_model, dropout = dropout)
-        ff = PositionwiseFeedForward(d_model, d_ff, dropout, ff_activation)
-        enc_position = SpatialPositionalEncoding(grids, d_model, dropout, enc_learnable_pos, enc_learnable_pos_type) if use_grid else lambda x,y : x
+        cross_attention = cross_attention(1 if isinstance(cross_attention(1,10,0.5), XLinearMultiHeadedAttention) else heads, d_model, dropout)
+        # cross_attention = CrossAttention[cross_attention](heads if cross_attention == 'dot-product' else 1, d_model, dropout = dropout)
+        ff = PositionwiseFeedForward(d_model, d_ff, dropout, c(ff_activation))
+        enc_position = enc_pos_embedding(d_model, dropout) if enc_pos_embedding else lambda x, y: x
+        # enc_position = SpatialPositionalEncoding(grids, d_model, dropout, enc_learnable_pos, enc_learnable_pos_type) if use_grid else lambda x,y : x
         dec_position = PositionalEncoding(d_model, dropout)
-        model = EncoderDecoder(Encoder(EncoderLayer(d_model, c(self_attn), c(ff), norm, dropout), norm, N),
-                               Decoder(DecoderLayer(d_model, c(self_attn), c(cross_attn), c(ff), norm, dropout), norm, N),
+        model = EncoderDecoder(Encoder(EncoderLayer(d_model, c(self_attn), c(ff), norm, dropout), c(norm), N),
+                               Decoder(DecoderLayer(d_model, c(self_attn), c(cross_attention), c(ff), c(norm), dropout), c(norm), N),
                                enc_position,
                                nn.Sequential(Embeddings(d_model, tgt_vocab), c(dec_position)),
                                Generator(d_model, tgt_vocab))
@@ -110,20 +106,26 @@ class TransformerModel(CaptionModel):
         for p in model.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
+        
         return model
 
     def logit(self, x): # unsafe way
         return self.model.generator.proj(x)
 
-    def _forward(self, att_feats, seq, att_masks = None, boxes = None):
+    def _forward(self,
+                 image_features: torch.Tensor,
+                 seq: torch.Tensor,
+                 image_masks: Optional[torch.Tensor] = None,
+                 boxes: Optional[torch.Tensor] = None
+                 ) -> torch.Tensor:
         """
         Parameters
         ----------
-        att_feats : torch.tensor of shape (B, L, D)
+        image_features : torch.tensor of shape (B, L, D)
                     Output of last conv layer of CNN or bottom-up features
         seq       : torch.tensor of shape (B, T+2)
                     1-indexed captions including <START> and <END>
-        att_masks : torch.tensor of shape (B, L) or None
+        image_masks : torch.tensor of shape (B, L) or None
                     Attention mask when no. of bottom-up proposals are
                     unequal across batch.
 
@@ -133,23 +135,32 @@ class TransformerModel(CaptionModel):
                     Distribution over vocabulary of the output sequence.
         """
         # Compute the visual embedding, remove end token and get causal sequence mask
-        att_feats, seq, boxes, att_masks, seq_mask = self._prepare_feature(att_feats, boxes, att_masks, seq)
+        image_features, seq, boxes, image_masks, seq_mask = self._prepare_feature(image_features, boxes, image_masks, seq)
         # Pass all the features through transformer encoder-decoder, (B,T+1,H)
-        out = self.model(att_feats, seq, boxes, att_masks, seq_mask)
+        out = self.model(image_features, seq, boxes, image_masks, seq_mask)
         # Project output to vocabulary size and compute log_softmax, (B,T+1,H)->(B,T+1,V)
         outputs = self.model.generator(out)
         return outputs
 
-    def _prepare_feature(self, att_feats, boxes, att_masks = None, seq = None):
+    def _prepare_feature(self,
+                         image_features: torch.Tensor,
+                         boxes: Optional[torch.Tensor],
+                         image_masks: Optional[torch.Tensor] = None,
+                         seq: Optional[torch.Tensor] = None
+                         ) -> Tuple[torch.Tensor,
+                                    Optional[torch.Tensor],
+                                    Optional[torch.Tensor],
+                                    torch.Tensor,
+                                    Optional[torch.Tensor]]:
         """
         Computes the embeddings of visual features, removes end token and
         prepares causal sequence mask.
 
         Parameters
         ----------
-        att_feats : torch.tensor of shape (B, L, D)
+        image_features : torch.tensor of shape (B, L, D)
                     Output of last conv layer of CNN or bottom-up features
-        att_masks : torch.tensor of shape (B, L), optional
+        image_masks : torch.tensor of shape (B, L), optional
                     Attention mask when no. of bottom-up proposals are unequal
                     across batch. Default is None.
         seq       : torch.tensor of shape (B, T+2), optional
@@ -158,24 +169,24 @@ class TransformerModel(CaptionModel):
 
         Returns
         -------
-        att_feats : torch.tensor of shape (B, P, E)
-                    att_feats after passing through attention embedding layers.
+        image_features : torch.tensor of shape (B, P, E)
+                    image_features after passing through attention embedding layers.
         seq       : torch.tensor of shape (B, T+1)
                     1-indexed captions including <START> but excluding <END>.
-        att_masks : torch.tensor of shape (B, 1, P)
+        image_masks : torch.tensor of shape (B, 1, P)
                     Attention mask.
         seq_mask  : torch.tensor of shape (B, T+1, T+1)
                     Causal sequence mask.
         """
         # Clip to maximum feature length. Required when using multi-GPU. (B,L,D)->(B,P,D)
-        att_feats, boxes, att_masks = clip_att(att_feats, boxes, att_masks)
-        # Applies self.att_embed layer on att_feats, (B,P,D)->(B,P,E)
-        att_feats = pack_wrapper(self.att_embed, att_feats, att_masks)
+        image_features, boxes, image_masks = clip_att(image_features, boxes, image_masks)
+        # Applies self.att_embed layer on image_features, (B,P,D)->(B,P,E)
+        image_features = pack_wrapper(self.att_embed, image_features, image_masks)
         # If no attention mask, create a mask with all ones, (B,P)
-        if att_masks is None:
-            att_masks = att_feats.new_ones(att_feats.shape[:2], dtype=torch.long)
+        if image_masks is None:
+            image_masks = image_features.new_ones(image_features.shape[:2], dtype=torch.long)
         # (B,P)->(B,1,P)
-        att_masks = att_masks.unsqueeze(-2)
+        image_masks = image_masks.unsqueeze(-2)
         # If sequence is available as input
         if seq is not None:
             # Crop the last token. Not to be decoded. (B,T+2)->(B,T+1)
@@ -191,9 +202,14 @@ class TransformerModel(CaptionModel):
         else:
             seq_mask = None
 
-        return att_feats, seq, boxes, att_masks, seq_mask
+        return image_features, seq, boxes, image_masks, seq_mask
 
-    def get_logprobs_state(self, it, enc_out, mask, state):
+    def get_logprobs_state(self,
+                           it: torch.Tensor,
+                           enc_out: torch.Tensor,
+                           mask: torch.Tensor,
+                           state: torch.Tensor
+                           ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
         Finds the log probability distribution of the next word given the encoder
         output and all previous words.
@@ -228,41 +244,40 @@ class TransformerModel(CaptionModel):
 
         return logprobs, [ys.unsqueeze(0)] # (B,V), (1,B,t+1)
 
-    def _sample_beam(self, att_feats, boxes, att_masks = None, opt = {}):
+    def _sample_beam(self,
+                     image_features: torch.Tensor,
+                     boxes: Optional[torch.Tensor],
+                     image_masks: Optional[torch.Tensor] = None,
+                     beam_width: int = 10,
+                     group_size: int = 1,
+                     decoding_constraint: bool = False,
+                     diversity_lambda: float = 0.5,
+                     perplexity: bool = False
+                     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generates captions by beam search.
+        Generate captions for the given input using beam search.
 
-        Parameters
-        ----------
-        att_feats   : torch.tensor of shape (B, L, D)
-                      Output of last conv layer of CNN or bottom-up features
-        att_masks   : torch.tensor of shape (B, L) or None
-                      Attention mask when no. of bottom-up proposals are unequal
-                      across batch.
-        opt         : dict
-                      Parameters for sampling.
-                      beam_size        : Size of beam
-                      group_size       : Group size for diverse beam search
-                      diversity_lambda : Lambda for diverse beam search
-                      max_ppl          : Beam search by max perplexity or probability
+        Args:
+            image_features (torch.Tensor): Image features (B,L,D)
+            boxes (Optional[torch.Tensor]): Bounding box features
+            image_masks (Optional[torch.Tensor], optional): Image feature mask when no. of features are unequal
+            across batch (B,L). Defaults to None.
+            beam_width (int, optional): Width of beam search. Defaults to 10.
+            group_size (int, optional): Group size for diverse beam search. Defaults to 1.
+            decoding_constraint (bool, optional): Whether not to allow same words in a row. Defaults to False.
+            diversity_lambda (float, optional): Lambda for diverse beam search. Defaults to 0.5.
+            perplexity (bool, optional): Whether to use perplexity instead of probability. Defaults to False.
 
-        Returns
-        -------
-        seq         : torch.tensor of shape (B, T)
-                      Indexed sequence
-        seqLogprobs : torch.tensor of shape (B, T)
-                      Diversity augmented log probabilities of the words in the
-                      sequence.
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Sampled sequence (B,T), Log probability of the samples (B,T)
         """
-        # Get beam size, default is 10
-        beam_size = opt.get('beam_size', 10)
-        batch_size = att_feats.size(0)
+        batch_size = image_features.size(0)
         # Compute the visual embedding, seq = None, seq_mask = None
-        att_feats, seq, boxes, att_masks, seq_mask = self._prepare_feature(att_feats, boxes, att_masks)
+        image_features, seq, boxes, image_masks, seq_mask = self._prepare_feature(image_features, boxes, image_masks)
         # Encode the visual features, (B,P,E)
-        memory = self.model.encode(att_feats, boxes, att_masks)
+        memory = self.model.encode(image_features, boxes, image_masks)
 
-        assert beam_size <= self.vocab_size + 1, 'Lets assume this for now, otherwise this corner case causes a few headaches down the road. can be dealt with in future if needed'
+        assert beam_width <= self.vocab_size + 1, 'Lets assume this for now, otherwise this corner case causes a few headaches down the road. can be dealt with in future if needed'
         seq = torch.LongTensor(self.seq_length, batch_size).zero_()
         seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
 
@@ -270,16 +285,16 @@ class TransformerModel(CaptionModel):
         self.done_beams = [[] for _ in range(batch_size)]
         for k in range(batch_size):
             state = None
-            # Get kth visual feature and replicate beam_size times
-            tmp_memory = memory[k:k+1].expand(*((beam_size,)+memory.size()[1:])).contiguous()
-            # Get kth attention mask and replicate beam_size times
-            tmp_att_masks = att_masks[k:k+1].expand(*((beam_size,)+att_masks.size()[1:])).contiguous() if att_masks is not None else None
+            # Get kth visual feature and replicate beam_width times
+            tmp_memory = memory[k:k+1].expand(*((beam_width,)+memory.size()[1:])).contiguous()
+            # Get kth attention mask and replicate beam_width times
+            tmp_image_masks = image_masks[k:k+1].expand(*((beam_width,)+image_masks.size()[1:])).contiguous() if image_masks is not None else None
             # Initial input = <START>
-            it = memory.new_zeros([beam_size], dtype=torch.long)
-            # Get the log probability of the next word, (beam_size, V), list-(1, beam_size, 1)
-            logprobs, state = self.get_logprobs_state(it, tmp_memory, tmp_att_masks, state)
+            it = memory.new_zeros([beam_width], dtype=torch.long)
+            # Get the log probability of the next word, (beam_width, V), list-(1, beam_width, 1)
+            logprobs, state = self.get_logprobs_state(it, tmp_memory, tmp_image_masks, state)
             # Perform beam serach
-            self.done_beams[k] = self.beam_search(state, logprobs, tmp_memory, tmp_att_masks, opt=opt)
+            self.done_beams[k] = self.beam_search(state, logprobs, tmp_memory, tmp_image_masks, beam_width, group_size, diversity_lambda, decoding_constraint, perplexity)
             # The first beam has highest cumulative score
             seq[:, k] = self.done_beams[k][0]['seq']
             # Get the sequence log probabilities of the first beam
@@ -287,58 +302,53 @@ class TransformerModel(CaptionModel):
         # Return the samples and their log likelihoods
         return seq.transpose(0, 1), seqLogprobs.transpose(0, 1)
 
-    def _sample(self, att_feats, att_masks = None, boxes = None, opt = {}):
+    def _sample(self,
+                image_features: torch.Tensor,
+                image_masks: Optional[torch.Tensor],# = None,
+                boxes: Optional[torch.Tensor],# = None,
+                sample_max: bool,# = True,
+                beam_width: int,# = 1,
+                group_size: int,
+                diversity_lambda: float,
+                perplexity: bool,
+                temperature: float = 1.0,
+                decoding_constraint: bool = False
+                ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generates sequences for the given input by greedy decoding (default),
-        sampling or beam search.
+        Generate captions for the given input by greedy decoding, sampling or beam search.
 
-        Parameters
-        ----------
-        att_feats   : torch.tensor of shape (B, L, D)
-                      Output of last conv layer of CNN or bottom-up features
-        att_masks   : torch.tensor of shape (B, L), optional
-                      Attention mask when no. of bottom-up proposals are unequal
-                      across batch. Default is None.
-        opt         : dict, optional
-                      Parameters for sampling.
-                      sample_max          : 1 - Greedy decoding, Otherwise - Sampling
-                      beam_size           : Beam width for beam search
-                      temperature         : Temperature parameter for sampling
-                      decoding_constraint : 1 - Not to allow same words in a row
-        Returns
-        -------
-        seq         : torch.tensor of shape (B, T)
-                      Sampled sequence
-        seqLogprobs : torch.tensor of shape (B, T)
-                      Log probability of the samples in the generated sequence.
+        Args:
+            image_features (torch.Tensor): Image feature (B,L,D)
+            image_masks (Optional[torch.Tensor], optional): Image feature mask when no. of features
+            are unequal across batch (B,L). Defaults to None.
+            boxes (Optional[torch.Tensor], optional): _description_. Defaults to None.
+            sample_max (bool, optional): Whether to do greedy decoding. Defaults to True.
+            beam_width (int, optional): Width of beam search. Defaults to 1.
+            temperature (float, optional): Sampling temperature. Defaults to 1.0.
+            decoding_constraint (bool, optional): Whether not to allow same words in a row. Defaults to False.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Sampled sequence (B,T), Log probability of the samples (B,T)
         """
-        # Get greedy decoding status, default is greedy decoding
-        sample_max = opt.get('sample_max', 1)
-        # Get beam size for beam search, default is no beam search
-        beam_size = opt.get('beam_size', 1)
-        # Get temperature for sampling, default is no temperature sampling
-        temperature = opt.get('temperature', 1.0)
-        # Whether not to allow same words in a row, default is allow
-        decoding_constraint = opt.get('decoding_constraint', 0)
-        if beam_size > 1:
-            return self._sample_beam(att_feats, boxes, att_masks, opt)
+        if beam_width > 1:
+            return self._sample_beam(image_features, boxes, image_masks, beam_width, group_size, decoding_constraint, diversity_lambda, perplexity)
 
-        batch_size = att_feats.shape[0]
+        batch_size = image_features.shape[0]
         # Compute the visual embedding, (B,P,E), seq = None, (B,P), seq_mask = None
-        att_feats, seq, boxes, att_masks, seq_mask = self._prepare_feature(att_feats, boxes, att_masks)
+        image_features, seq, boxes, image_masks, seq_mask = self._prepare_feature(image_features, boxes, image_masks)
 
         state = None
         # Encode the visual features, (B,P,E)
-        memory = self.model.encode(att_feats, boxes, att_masks)
+        memory = self.model.encode(image_features, boxes, image_masks)
         # Tensor for storing sequence and log probabilities
-        seq = att_feats.new_zeros((batch_size, self.seq_length), dtype=torch.long)
-        seqLogprobs = att_feats.new_zeros(batch_size, self.seq_length)
+        seq = image_features.new_zeros((batch_size, self.seq_length), dtype=torch.long)
+        seqLogprobs = image_features.new_zeros(batch_size, self.seq_length)
 
         for t in range(self.seq_length + 1):
             if t == 0: # input <START>
                 it = memory.new_zeros(batch_size, dtype=torch.long)
             # Get the log probability of the next word, (B,V), [(1,B,t+1)]
-            logprobs, state = self.get_logprobs_state(it, memory, att_masks, state)
+            logprobs, state = self.get_logprobs_state(it, memory, image_masks, state)
             # Whether not to allow same word in a row
             if decoding_constraint and t > 0:
                 tmp = seqLogprobs.new_zeros(seqLogprobs.shape[0], self.vocab_size + 1)
